@@ -48,7 +48,7 @@ void OS_init(void *stkSto, uint32_t stkSize);
 void OS_onIdle(void);
 
 /* this function must be called with interrupts DISABLED */
-void OS_sched(void);
+OSThread* OS_sched(void);
 
 /* transfer control to the RTOS to run the threads */
 void OS_run(void);

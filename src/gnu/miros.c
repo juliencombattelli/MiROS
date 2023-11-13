@@ -62,7 +62,7 @@ void OS_init(void *stkSto, uint32_t stkSize) {
                    stkSto, stkSize);
 }
 
-void OS_sched(void) {
+OSThread* OS_sched(void) {
     /* choose the next thread to execute... */
     OSThread *next;
     if (OS_readySet == 0U) { /* idle condition? */
@@ -78,6 +78,8 @@ void OS_sched(void) {
         OS_next = next;
         *(uint32_t volatile *)0xE000ED04 = (1U << 28);
     }
+
+    return next;
 }
 
 void OS_run(void) {
