@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "*.cmake.in": "cmake",
+        ".clang-format": "yaml",
+        "miros.h": "c",
+        "stm32f4xx.h": "c"
+    }
+}
