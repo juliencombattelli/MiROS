@@ -8,9 +8,9 @@ void main_blinky1() {
     puts("Starting thread blinky1");
     while (1) {
         BSP_ledGreenOn();
-        OS_delay(BSP_TICKS_PER_SEC / 4U);
+        OS_delay(BSP_TICKS_PER_SEC / 6U);
         BSP_ledGreenOff();
-        OS_delay(BSP_TICKS_PER_SEC * 3U / 4U);
+        OS_delay(BSP_TICKS_PER_SEC * 5U / 6U);
     }
 }
 
@@ -20,9 +20,9 @@ void main_blinky2() {
     puts("Starting thread blinky2");
     while (1) {
         BSP_ledBlueOn();
-        OS_delay(BSP_TICKS_PER_SEC / 2U);
+        OS_delay(BSP_TICKS_PER_SEC * 2U / 8U);
         BSP_ledBlueOff();
-        OS_delay(BSP_TICKS_PER_SEC / 3U);
+        OS_delay(BSP_TICKS_PER_SEC * 6U / 8U);
     }
 }
 
@@ -32,9 +32,9 @@ void main_blinky3() {
     puts("Starting thread blinky3");
     while (1) {
         BSP_ledRedOn();
-        OS_delay(BSP_TICKS_PER_SEC / 3U);
+        OS_delay(BSP_TICKS_PER_SEC * 4U / 12U);
         BSP_ledRedOff();
-        OS_delay(BSP_TICKS_PER_SEC * 3U / 5U);
+        OS_delay(BSP_TICKS_PER_SEC * 8U / 12U);
     }
 }
 
@@ -48,7 +48,7 @@ int main() {
 
     /* start blinky1 thread */
     OSThread_start(&blinky1,
-                   5U, /* priority */
+                   3U, /* priority */
                    &main_blinky1,
                    stack_blinky1, sizeof(stack_blinky1));
 
@@ -67,5 +67,5 @@ int main() {
     /* transfer control to the RTOS to run the threads */
     OS_run();
 
-    //return 0;
+    return 0;
 }
