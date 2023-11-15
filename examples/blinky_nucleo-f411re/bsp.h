@@ -2,7 +2,7 @@
 #define __BSP_H__
 
 /* system clock tick [Hz] */
-#define BSP_TICKS_PER_SEC 100000U
+#define BSP_TICKS_PER_SEC 60U
 
 void BSP_init(void);
 
