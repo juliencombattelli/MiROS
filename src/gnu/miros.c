@@ -33,6 +33,8 @@
 #include "miros.h"
 #include "qassert.h"
 
+#include "platform.h"
+
 Q_DEFINE_THIS_FILE
 
 OSThread * volatile OS_curr; /* pointer to the current thread */
@@ -51,9 +53,14 @@ void main_idleThread() {
     }
 }
 
+static inline void OS_triggerContextSwitch(void) {
+    // Set the PendSV exception as pending to perform the context switch
+    SCB->ICSR |= SCB_ICSR_PENDSVSET_Msk;
+}
+
 void OS_init(void *stkSto, uint32_t stkSize) {
     /* set the PendSV interrupt priority to the lowest level 0xFF */
-    *(uint32_t volatile *)0xE000ED20 |= (0xFFU << 16);
+    NVIC_SetPriority(PendSV_IRQn, 0xFF);
 
     /* start idleThread thread */
     OSThread_start(&idleThread,
@@ -76,7 +83,7 @@ OSThread* OS_sched(void) {
     /* trigger PendSV, if needed */
     if (next != OS_curr) {
         OS_next = next;
-        *(uint32_t volatile *)0xE000ED04 = (1U << 28);
+        OS_triggerContextSwitch();
     }
 
     return next;
@@ -86,9 +93,9 @@ void OS_run(void) {
     /* callback to configure and start interrupts */
     OS_onStartup();
 
-    __asm volatile ("cpsid i");
+    __disable_irq();
     OS_sched();
-    __asm volatile ("cpsie i");
+    __enable_irq();
 
     /* the following code should never execute */
     Q_ERROR();
@@ -113,7 +120,7 @@ void OS_tick(void) {
 
 void OS_delay(uint32_t ticks) {
     uint32_t bit;
-    __asm volatile ("cpsid i");
+    __disable_irq();
 
     /* never call OS_delay from the idleThread */
     Q_REQUIRE(OS_curr != OS_thread[0]);
@@ -123,7 +130,29 @@ void OS_delay(uint32_t ticks) {
     OS_readySet &= ~bit;
     OS_delayedSet |= bit;
     OS_sched();
-    __asm volatile ("cpsie i");
+    __enable_irq();
+}
+
+static uintptr_t OS_pushStackFrame(uint32_t* sp, uintptr_t pc) {
+    *(--sp) = (1U << 24); /* xPSR */
+    *(--sp) = pc;         /* PC */
+    *(--sp) = 0;          /* LR  */
+    *(--sp) = 0x12121212; /* R12 */
+    *(--sp) = 0x03030303; /* R3  */
+    *(--sp) = 0x02020202; /* R2  */
+    *(--sp) = 0x01010101; /* R1  */
+    *(--sp) = 0x00000000; /* R0  */ /* use it to store a user void pointer */
+    /* push additional non-saved registers according to AAPCS */
+    *(--sp) = 0x11111111; /* R11 */
+    *(--sp) = 0x10101010; /* R10 */
+    *(--sp) = 0x09090909; /* R9 */
+    *(--sp) = 0x08080808; /* R8 */
+    *(--sp) = 0x07070707; /* R7 */
+    *(--sp) = 0x06060606; /* R6 */
+    *(--sp) = 0x05050505; /* R5 */
+    *(--sp) = 0x04040404; /* R4 */
+
+    return sp;
 }
 
 void OSThread_start(
@@ -136,41 +165,20 @@ void OSThread_start(
     * NOTE: ARM Cortex-M stack grows down from hi -> low memory
     */
     uint32_t *sp = (uint32_t *)((((uint32_t)stkSto + stkSize) / 8) * 8);
-    uint32_t *stk_limit;
+    /* round up the bottom of the stack to the 8-byte boundary */
+    uint32_t *stk_limit = (uint32_t *)(((((uint32_t)stkSto - 1U) / 8) + 1U) * 8);
 
-    /* priority must be in ragne
-    * and the priority level must be unused
-    */
-    Q_REQUIRE((prio < Q_DIM(OS_thread))
-              && (OS_thread[prio] == (OSThread *)0));
+    /* priority must be in range and the priority level must be unused */
+    Q_REQUIRE((prio < Q_DIM(OS_thread)) && (OS_thread[prio] == (OSThread *)0));
 
-    *(--sp) = (1U << 24);  /* xPSR */
-    *(--sp) = (uint32_t)threadHandler; /* PC */
-    *(--sp) = 0x0000000EU; /* LR  */
-    *(--sp) = 0x0000000CU; /* R12 */
-    *(--sp) = 0x00000003U; /* R3  */
-    *(--sp) = 0x00000002U; /* R2  */
-    *(--sp) = 0x00000001U; /* R1  */
-    *(--sp) = 0x00000000U; /* R0  */
-    /* additionally, fake registers R4-R11 */
-    *(--sp) = 0x0000000BU; /* R11 */
-    *(--sp) = 0x0000000AU; /* R10 */
-    *(--sp) = 0x00000009U; /* R9 */
-    *(--sp) = 0x00000008U; /* R8 */
-    *(--sp) = 0x00000007U; /* R7 */
-    *(--sp) = 0x00000006U; /* R6 */
-    *(--sp) = 0x00000005U; /* R5 */
-    *(--sp) = 0x00000004U; /* R4 */
+    sp = OS_pushStackFrame(sp, threadHandler);
 
-    /* save the top of the stack in the thread's attibute */
+    /* save the top of the stack in the thread's attribute */
     me->sp = sp;
 
-    /* round up the bottom of the stack to the 8-byte boundary */
-    stk_limit = (uint32_t *)(((((uint32_t)stkSto - 1U) / 8) + 1U) * 8);
-
-    /* pre-fill the unused part of the stack with 0xDEADBEEF */
+    /* pre-fill the unused part of the stack */
     for (sp = sp - 1U; sp >= stk_limit; --sp) {
-        *sp = 0xDEADBEEFU;
+        *sp = 0xDEADBEEF;
     }
 
     /* register the thread with the OS */
@@ -182,46 +190,30 @@ void OSThread_start(
     }
 }
 
-__attribute__ ((naked, optimize("-fno-stack-protector")))
+/**
+ *
+ * @brief PendSV exception handler, handling context switches
+ *
+ * The PendSV exception is the only execution context in the system that can
+ * perform context switching. When an execution context finds out it has to
+ * switch contexts, it pends the PendSV exception.
+ *
+ * When PendSV is pended, the decision that a context switch must happen has
+ * already been taken. In other words, when PendSV_Handler() runs, we *know* we
+ * have to swap *something*.
+ * 
+ * Implementation based on 'Use of SVCall and PendSV to avoid critical code
+ * regions' on page B1-641 of the ARMv7-M architecture reference manual.
+ */
 void PendSV_Handler(void) {
-__asm volatile (
-
-    /* __disable_irq(); */
-    "  CPSID         I                 \n"
-
-    /* if (OS_curr != (OSThread *)0) { */
-    "  LDR           r1,=OS_curr       \n"
-    "  LDR           r1,[r1,#0x00]     \n"
-    "  CBZ           r1,PendSV_restore \n"
-
-    /*     push registers r4-r11 on the stack */
-    "  PUSH          {r4-r11}          \n"
-
-    /*     OS_curr->sp = sp; */
-    "  LDR           r1,=OS_curr       \n"
-    "  LDR           r1,[r1,#0x00]     \n"
-    "  STR           sp,[r1,#0x00]     \n"
-    /* } */
-
-    "PendSV_restore:                   \n"
-    /* sp = OS_next->sp; */
-    "  LDR           r1,=OS_next       \n"
-    "  LDR           r1,[r1,#0x00]     \n"
-    "  LDR           sp,[r1,#0x00]     \n"
-
-    /* OS_curr = OS_next; */
-    "  LDR           r1,=OS_next       \n"
-    "  LDR           r1,[r1,#0x00]     \n"
-    "  LDR           r2,=OS_curr       \n"
-    "  STR           r1,[r2,#0x00]     \n"
-
-    /* pop registers r4-r11 */
-    "  POP           {r4-r11}          \n"
-
-    /* __enable_irq(); */
-    "  CPSIE         I                 \n"
-
-    /* return to the next thread */
-    "  BX            lr                \n"
-    );
+    // Push callee-save registers
+    asm volatile ("push {r4-r11}");
+    // Save current stack pointer into the suspended task context
+    OS_curr->sp = __get_MSP();
+    // Set the stack pointer to the next executed task
+    __set_MSP(OS_next->sp);
+    // Replace the current task pointer with the next executed one
+    OS_curr = OS_next;
+    // Pop the callee-save registers
+    asm volatile ("pop {r4-r11}");
 }

@@ -64,6 +64,7 @@ VPATH = \
 INCLUDES  = \
 	-I.. \
 	-I../../../include \
+	-I../../../platform/stm32f411re \
 	-I../../../3rd_party/CMSIS/Include \
 	-I../../../3rd_party/nucleo-f411re
 
