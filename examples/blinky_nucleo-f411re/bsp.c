@@ -22,8 +22,7 @@ void SysTick_Handler(void) {
 
     __disable_irq();
     OSThread* next = OS_sched();
-    if (next->prio != 0) // do not save idle
-        circular_buf_put(&history, next->prio);
+    circular_buf_put(&history, next->prio);
     __enable_irq();
 }
 
